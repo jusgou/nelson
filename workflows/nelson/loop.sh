@@ -172,23 +172,39 @@ find_prd_files() {
   printf '%s\n' "${files[@]}" | sort -t'-' -k2 -n
 }
 
+is_prd_valid() {
+  local prd="$1"
+  # Check file exists, is non-empty, and has userStories array
+  [ -s "$prd" ] && jq -e '.userStories | length > 0' "$prd" >/dev/null 2>&1
+}
+
 is_prd_complete() {
   local prd="$1"
-  local incomplete=$(jq '[.userStories[] | select(.passes == false)] | length' "$prd" 2>/dev/null || echo "999")
-  [ "$incomplete" -eq 0 ]
+  # Return false if PRD is invalid
+  is_prd_valid "$prd" || return 1
+  local incomplete=$(jq '[.userStories[] | select(.passes == false)] | length' "$prd" 2>/dev/null)
+  [ -n "$incomplete" ] && [ "$incomplete" -eq 0 ]
 }
 
 get_completed_count() {
-  jq '[.userStories[] | select(.passes == true)] | length' "$1" 2>/dev/null || echo "0"
+  local result=$(jq '[.userStories[] | select(.passes == true)] | length' "$1" 2>/dev/null)
+  echo "${result:-0}"
 }
 
 get_total_count() {
-  jq '.userStories | length' "$1" 2>/dev/null || echo "0"
+  local result=$(jq '.userStories | length' "$1" 2>/dev/null)
+  echo "${result:-0}"
 }
 
 # Find first incomplete PRD, respecting locks if locking is enabled
 find_active_prd() {
   for prd in $(find_prd_files); do
+    # Skip invalid PRDs
+    if ! is_prd_valid "$prd"; then
+      echo -e "${YELLOW}!${NC} Skipping $(basename "$prd") (invalid or empty)" >&2
+      continue
+    fi
+
     # Skip complete PRDs
     is_prd_complete "$prd" && continue
 
@@ -387,6 +403,23 @@ if [ "$USE_LOCKING" = true ]; then
 fi
 
 PRD_NAME=$(get_prd_name "$ACTIVE_PRD")
+
+# Validate PRD before proceeding
+if ! is_prd_valid "$ACTIVE_PRD"; then
+  echo -e "${RED}Error: PRD file is invalid or empty: $ACTIVE_PRD${NC}"
+  echo ""
+  echo "The PRD file must:"
+  echo "  - Exist and be non-empty"
+  echo "  - Be valid JSON"
+  echo "  - Have a 'userStories' array with at least one story"
+  echo ""
+  echo "Try regenerating it with: nelson-prd-generator"
+  if [ "$USE_LOCKING" = true ]; then
+    release_lock "$ACTIVE_PRD"
+  fi
+  exit 1
+fi
+
 COMPLETED=$(get_completed_count "$ACTIVE_PRD")
 TOTAL=$(get_total_count "$ACTIVE_PRD")
 

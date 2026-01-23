@@ -329,4 +329,4 @@ fi
 gather_input
 generate_prd
 
-print_success "Done! Happy Nelson-ing!"
+print_success "Done! Throw punches."
