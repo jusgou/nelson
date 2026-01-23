@@ -304,7 +304,9 @@ Examples of when to split:
 
 ## Output Format
 
-Output ONLY the JSON, no other text. Format:
+**CRITICAL: You must output the JSON below to stdout. Do NOT just describe what you would create. Do NOT create files directly. Output the actual JSON content between the markers.**
+
+Output ONLY the JSON, no other text, no explanations, no summaries. Format:
 
 \`\`\`json
 {
@@ -375,7 +377,23 @@ EOF
         fi
     fi
 
-    echo "$EXTRACTED" > "$NELSON_DIR/$output_file"
+    # Save extracted content if we got any
+    if [ -n "$EXTRACTED" ]; then
+        echo "$EXTRACTED" > "$NELSON_DIR/$output_file"
+    fi
+
+    # Check if Claude wrote the file directly (sometimes it does this instead of outputting)
+    if ! jq -e '.userStories | length > 0' "$NELSON_DIR/$output_file" >/dev/null 2>&1; then
+        # Extraction failed - check if Claude wrote to alternate locations
+        for check_path in "prd.json" ".nelson/prd.json" "$NELSON_DIR/prd.json"; do
+            if [ -f "$check_path" ] && jq -e '.userStories | length > 0' "$check_path" >/dev/null 2>&1; then
+                echo -e "${YELLOW}→${NC} Found PRD at $check_path, moving to $NELSON_DIR/$output_file"
+                cp "$check_path" "$NELSON_DIR/$output_file"
+                [ "$check_path" != "$NELSON_DIR/$output_file" ] && rm -f "$check_path"
+                break
+            fi
+        done
+    fi
 
     # Validate
     if [ -s "$NELSON_DIR/$output_file" ] && jq -e '.userStories | length > 0' "$NELSON_DIR/$output_file" >/dev/null 2>&1; then
@@ -418,9 +436,9 @@ full_setup() {
     echo -e "${BOLD}3. What is the main goal? What problem are you solving?${NC}"
     read -p "> " PROJECT_GOAL
 
-    # 4. Features
+    # 4. Features/Tasks
     echo ""
-    echo -e "${BOLD}4. List the key features/capabilities needed (one per line).${NC}"
+    echo -e "${BOLD}4. List features/capabilities or tasks (one per line).${NC}"
     echo "Press Enter twice when done:"
     echo ""
 
