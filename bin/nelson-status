@@ -215,16 +215,16 @@ show_status() {
   fi
 
   # Nelson process check
-  if pgrep -f "ralph.*\.sh" > /dev/null 2>&1; then
-    NELSON_PID=$(pgrep -f "ralph.*\.sh" | head -1)
+  if pgrep -f "loop\.sh" > /dev/null 2>&1; then
+    NELSON_PID=$(pgrep -f "loop\.sh" | head -1)
     echo -e "  ${GREEN}✓ Nelson running${NC} (PID: $NELSON_PID)"
   else
     echo -e "  ${GRAY}○ Nelson not running${NC}"
   fi
 
   # Claude process check
-  if pgrep -f "claude.*dangerous" > /dev/null 2>&1; then
-    CLAUDE_PID=$(pgrep -f "claude.*dangerous" | head -1)
+  if pgrep -x "claude" > /dev/null 2>&1; then
+    CLAUDE_PID=$(pgrep -x "claude" | head -1)
     CLAUDE_CPU=$(ps -p $CLAUDE_PID -o %cpu= 2>/dev/null | xargs)
     CLAUDE_MEM=$(ps -p $CLAUDE_PID -o %mem= 2>/dev/null | xargs)
     echo -e "  ${GREEN}✓ Claude working${NC} (PID: $CLAUDE_PID, CPU: ${CLAUDE_CPU}%, MEM: ${CLAUDE_MEM}%)"
