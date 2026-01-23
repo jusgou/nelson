@@ -27,7 +27,18 @@ curl -fsSL https://raw.githubusercontent.com/jusgou/nelson/main/install.sh | bas
 # Or manual
 git clone git@github.com:jusgou/nelson.git ~/.nelson
 chmod +x ~/.nelson/bin/nelson-*
-export PATH="$HOME/.nelson/bin:$PATH"  # Add to ~/.bashrc
+```
+
+Add to PATH permanently (pick one based on your shell):
+
+```bash
+# For bash users
+echo 'export PATH="$HOME/.nelson/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+
+# For zsh users
+echo 'export PATH="$HOME/.nelson/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
 ```
 
 Verify: `which nelson-scaffold`
