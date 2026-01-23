@@ -27,6 +27,10 @@ REVIEW_EVERY=${NELSON_FREQUENCY:-1}
 EXPLICIT_PRD=""
 USE_LOCKING=true
 
+# Session management - controls when to start fresh vs continue
+MAX_SESSION_ITERATIONS=6        # Fresh start after N iterations in same session
+STORIES_PER_SESSION=3           # Or fresh start after N stories completed
+
 while [[ $# -gt 0 ]]; do
   case $1 in
     --tool)
@@ -77,6 +81,8 @@ COMPLETIONS_DIR="$SCRIPT_DIR/completions"
 LOGS_DIR="$SCRIPT_DIR/nelson-logs"
 LOCKS_DIR="$SCRIPT_DIR/.locks"
 LAST_REVIEW_FILE="$SCRIPT_DIR/.last-review-count"
+SESSION_FILE="$SCRIPT_DIR/.session-state"
+HANDOFF_FILE="$SCRIPT_DIR/handoff-summary.md"
 
 # Colors
 GREEN='\033[0;32m'
@@ -158,6 +164,152 @@ cleanup() {
   fi
 }
 trap cleanup EXIT INT TERM
+
+# ============================================================
+# SESSION MANAGEMENT FUNCTIONS
+# ============================================================
+
+# Get current session iteration count
+get_session_iterations() {
+  if [ -f "$SESSION_FILE" ]; then
+    grep "^iterations=" "$SESSION_FILE" 2>/dev/null | cut -d= -f2 || echo "0"
+  else
+    echo "0"
+  fi
+}
+
+# Get stories count at session start
+get_session_stories_start() {
+  if [ -f "$SESSION_FILE" ]; then
+    grep "^stories_at_start=" "$SESSION_FILE" 2>/dev/null | cut -d= -f2 || echo "0"
+  else
+    echo "0"
+  fi
+}
+
+# Initialize or reset session state
+reset_session() {
+  local current_stories="${1:-0}"
+  cat > "$SESSION_FILE" << EOF
+iterations=0
+stories_at_start=$current_stories
+started=$(date -Iseconds)
+EOF
+}
+
+# Increment session iteration count
+increment_session() {
+  local iters=$(get_session_iterations)
+  local stories_start=$(get_session_stories_start)
+  local started=$(grep "^started=" "$SESSION_FILE" 2>/dev/null | cut -d= -f2 || date -Iseconds)
+  cat > "$SESSION_FILE" << EOF
+iterations=$((iters + 1))
+stories_at_start=$stories_start
+started=$started
+EOF
+}
+
+# Check if we should start a fresh session
+should_start_fresh() {
+  local current_stories="$1"
+
+  # No session file = definitely start fresh
+  [ ! -f "$SESSION_FILE" ] && return 0
+
+  local iters=$(get_session_iterations)
+  local stories_start=$(get_session_stories_start)
+  local stories_completed=$((current_stories - stories_start))
+
+  # Check iteration threshold
+  if [ "$iters" -ge "$MAX_SESSION_ITERATIONS" ]; then
+    echo -e "${YELLOW}→${NC} Session iteration limit reached ($iters >= $MAX_SESSION_ITERATIONS)"
+    return 0
+  fi
+
+  # Check stories threshold
+  if [ "$stories_completed" -ge "$STORIES_PER_SESSION" ]; then
+    echo -e "${YELLOW}→${NC} Session story limit reached ($stories_completed >= $STORIES_PER_SESSION)"
+    return 0
+  fi
+
+  return 1
+}
+
+# Create handoff summary before starting fresh session
+create_handoff() {
+  echo -e "${BLUE}→${NC} Creating handoff summary..."
+
+  local handoff_prompt=$(mktemp)
+  cat > "$handoff_prompt" << 'EOF'
+Before this session ends, create a handoff summary for the next Claude instance.
+
+Write to .nelson/handoff-summary.md with this structure:
+
+```markdown
+# Nelson Handoff Summary
+Generated: [current date/time]
+
+## Completed This Session
+[List stories completed with brief notes on implementation approach]
+
+## Key Decisions
+[Important architectural or design decisions made]
+
+## Patterns Discovered
+[Codebase patterns, conventions, or idioms found]
+
+## Watch Out For
+[Gotchas, edge cases, or things that caused issues]
+
+## Current State
+[What's working, what's next]
+```
+
+Be concise but capture essential context for continuity.
+When done, output: <promise>HANDOFF_DONE</promise>
+EOF
+
+  local output
+  if [[ "$TOOL" == "amp" ]]; then
+    output=$(cat "$handoff_prompt" | amp --dangerously-allow-all 2>&1) || true
+  else
+    output=$(cat "$handoff_prompt" | claude --dangerously-skip-permissions --print --continue 2>&1) || true
+  fi
+  rm -f "$handoff_prompt"
+
+  if echo "$output" | grep -q "<promise>HANDOFF_DONE</promise>"; then
+    echo -e "${GREEN}✓${NC} Handoff summary created"
+  else
+    echo -e "${YELLOW}!${NC} Handoff summary may be incomplete"
+  fi
+}
+
+# Run Claude with appropriate flags
+run_claude() {
+  local prompt_file="$1"
+  local use_continue="$2"
+  local output
+
+  if [[ "$TOOL" == "amp" ]]; then
+    output=$(cat "$prompt_file" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
+  else
+    if [ "$use_continue" = true ]; then
+      output=$(cat "$prompt_file" | claude --dangerously-skip-permissions --print --continue 2>&1 | tee /dev/stderr) || true
+    else
+      output=$(cat "$prompt_file" | claude --dangerously-skip-permissions --print 2>&1 | tee /dev/stderr) || true
+    fi
+  fi
+
+  # Check for context/error issues
+  if echo "$output" | grep -qiE "(No messages returned|context.*too|out of context)"; then
+    echo -e "${YELLOW}!${NC} Context issue detected" >&2
+    CONTEXT_ERROR=true
+  else
+    CONTEXT_ERROR=false
+  fi
+
+  echo "$output"
+}
 
 # ============================================================
 # PRD FUNCTIONS
@@ -439,10 +591,30 @@ echo ""
 mkdir -p "$LOGS_DIR"
 init_progress
 
+# Initialize session tracking
+COMPLETED=$(get_completed_count "$ACTIVE_PRD")
+if [ ! -f "$SESSION_FILE" ]; then
+  reset_session "$COMPLETED"
+fi
+USE_CONTINUE=false
+CONTEXT_ERROR=false
+
 for i in $(seq 1 $MAX_ITERATIONS); do
   COMPLETED=$(get_completed_count "$ACTIVE_PRD")
   TOTAL=$(get_total_count "$ACTIVE_PRD")
   LAST_REVIEWED=$(get_last_review_count)
+
+  # Session management: check if we need to start fresh
+  if [ "$CONTEXT_ERROR" = true ] || should_start_fresh "$COMPLETED"; then
+    # Create handoff if we have an existing session
+    if [ -f "$SESSION_FILE" ] && [ "$(get_session_iterations)" -gt 0 ]; then
+      create_handoff
+    fi
+    reset_session "$COMPLETED"
+    USE_CONTINUE=false
+    CONTEXT_ERROR=false
+    echo -e "${BLUE}→${NC} Starting fresh session"
+  fi
 
   # PRD complete?
   if is_prd_complete "$ACTIVE_PRD"; then
@@ -470,11 +642,7 @@ Perform final holistic review:
 5. Output <promise>COMPLETE</promise>
 EOF
 
-    if [[ "$TOOL" == "amp" ]]; then
-      OUTPUT=$(cat "$PROMPT" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
-    else
-      OUTPUT=$(cat "$PROMPT" | claude --dangerously-skip-permissions --print 2>&1 | tee /dev/stderr) || true
-    fi
+    OUTPUT=$(run_claude "$PROMPT" "$USE_CONTINUE")
     rm -f "$PROMPT"
 
     DOC=$(create_completion_doc "$ACTIVE_PRD")
@@ -557,12 +725,12 @@ This is a HOLISTIC review of ALL completed work - not just the last story.
 $(jq -r '.userStories[] | select(.passes == true) | "- \(.id): \(.title)"' "$ACTIVE_PRD" 2>/dev/null)
 EOF
 
-    if [[ "$TOOL" == "amp" ]]; then
-      OUTPUT=$(cat "$PROMPT" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
-    else
-      OUTPUT=$(cat "$PROMPT" | claude --dangerously-skip-permissions --print 2>&1 | tee /dev/stderr) || true
-    fi
+    OUTPUT=$(run_claude "$PROMPT" "$USE_CONTINUE")
     rm -f "$PROMPT"
+
+    # Update session state
+    increment_session
+    USE_CONTINUE=true
 
     if echo "$OUTPUT" | grep -q "<promise>REVIEW_DONE</promise>"; then
       set_last_review_count "$COMPLETED"
@@ -609,12 +777,12 @@ $(jq -r '.userStories[] | select(.passes == false) | "- \(.id): \(.title) [prior
 ### Next review at: $((COMPLETED < START_REVIEW ? START_REVIEW : COMPLETED + REVIEW_EVERY - ((COMPLETED - START_REVIEW) % REVIEW_EVERY))) stories
 EOF
 
-    if [[ "$TOOL" == "amp" ]]; then
-      OUTPUT=$(cat "$PROMPT" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
-    else
-      OUTPUT=$(cat "$PROMPT" | claude --dangerously-skip-permissions --print 2>&1 | tee /dev/stderr) || true
-    fi
+    OUTPUT=$(run_claude "$PROMPT" "$USE_CONTINUE")
     rm -f "$PROMPT"
+
+    # Update session state
+    increment_session
+    USE_CONTINUE=true
 
     if echo "$OUTPUT" | grep -q "<promise>STORY_DONE</promise>"; then
       NEW_COUNT=$(get_completed_count "$ACTIVE_PRD")
