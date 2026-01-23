@@ -1,0 +1,580 @@
+#!/bin/bash
+# Nelson Init - Interactive setup for Nelson Loop Framework
+# Usage: nelson-init
+
+set -e
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+NELSON_HOME="${NELSON_HOME:-$HOME/.nelson}"
+NELSON_DIR=".nelson"
+CONFIG_FILE="$NELSON_DIR/config.json"
+
+print_header() {
+    echo ""
+    echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${BOLD}Nelson Setup${NC}                                               ${BLUE}║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+print_success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+print_info() {
+    echo -e "${BLUE}→${NC} $1"
+}
+
+print_warn() {
+    echo -e "${YELLOW}!${NC} $1"
+}
+
+# Prompt with options - sets REPLY to the number selected
+prompt_choice() {
+    local prompt="$1"
+    shift
+    local options=("$@")
+
+    echo ""
+    echo -e "${BOLD}$prompt${NC}"
+    echo ""
+
+    local i=1
+    for opt in "${options[@]}"; do
+        echo "  [$i] $opt"
+        ((i++))
+    done
+    echo ""
+
+    while true; do
+        read -p "> " REPLY
+        if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le "${#options[@]}" ]; then
+            return 0
+        fi
+        echo "Please enter a number between 1 and ${#options[@]}"
+    done
+}
+
+# Check for existing setup
+check_existing() {
+    if [ -d "$NELSON_DIR" ]; then
+        if [ -f "$CONFIG_FILE" ]; then
+            return 0  # Existing config found
+        fi
+    fi
+    return 1  # No existing config
+}
+
+# Count PRD files
+count_prds() {
+    local count=0
+    if [ -f "$NELSON_DIR/prd.json" ]; then
+        count=1
+        local num=2
+        while [ -f "$NELSON_DIR/prd-${num}.json" ]; do
+            ((count++))
+            ((num++))
+        done
+    fi
+    echo $count
+}
+
+# Get next PRD filename
+get_next_prd() {
+    if [ ! -f "$NELSON_DIR/prd.json" ]; then
+        echo "prd.json"
+    else
+        local num=2
+        while [ -f "$NELSON_DIR/prd-${num}.json" ]; do
+            ((num++))
+        done
+        echo "prd-${num}.json"
+    fi
+}
+
+# Setup project structure
+setup_structure() {
+    mkdir -p "$NELSON_DIR"
+    mkdir -p "$NELSON_DIR/nelson-logs"
+    mkdir -p "$NELSON_DIR/completions"
+    mkdir -p "$NELSON_DIR/.locks"
+
+    # Copy loop script
+    if [ -f "$NELSON_HOME/workflows/nelson/loop.sh" ]; then
+        cp "$NELSON_HOME/workflows/nelson/loop.sh" "$NELSON_DIR/loop.sh"
+        chmod +x "$NELSON_DIR/loop.sh"
+    fi
+
+    # Copy CLAUDE.md
+    if [ -f "$NELSON_HOME/workflows/nelson/CLAUDE.md" ]; then
+        cp "$NELSON_HOME/workflows/nelson/CLAUDE.md" "$NELSON_DIR/CLAUDE.md"
+    fi
+
+    # Create AGENTS.md if it doesn't exist
+    if [ ! -f "$NELSON_DIR/AGENTS.md" ]; then
+        cat > "$NELSON_DIR/AGENTS.md" << 'AGENTS_EOF'
+# Project Guide
+
+## Overview
+[Describe your project here]
+
+## Tech Stack
+[List your technologies]
+
+## Build Commands
+```bash
+# Build
+[your build command]
+
+# Test
+[your test command]
+
+# Typecheck
+[your typecheck command]
+```
+
+## Project Structure
+```
+src/
+├── [describe your structure]
+```
+
+## Key Patterns
+[Document important patterns and conventions]
+
+## Known Issues
+[Track gotchas and workarounds]
+AGENTS_EOF
+    fi
+
+    # Create .gitignore if it doesn't exist
+    if [ ! -f "$NELSON_DIR/.gitignore" ]; then
+        cat > "$NELSON_DIR/.gitignore" << 'GITIGNORE_EOF'
+.locks/
+*.lock
+GITIGNORE_EOF
+    fi
+
+    # Create progress.txt if it doesn't exist
+    if [ ! -f "$NELSON_DIR/progress.txt" ]; then
+        echo "# Nelson Progress Log" > "$NELSON_DIR/progress.txt"
+        echo "" >> "$NELSON_DIR/progress.txt"
+    fi
+}
+
+# Save config
+save_config() {
+    local project="$1"
+    local mode="$2"
+    local frequency="$3"
+    local locking="$4"
+
+    cat > "$CONFIG_FILE" << EOF
+{
+  "project": "$project",
+  "mode": "$mode",
+  "reviewFrequency": $frequency,
+  "locking": $locking
+}
+EOF
+}
+
+# Run PRD generator inline
+run_prd_generator() {
+    local output_file="$1"
+    local project_name="$2"
+    local DESCRIPTION="$3"
+    local GOAL="$4"
+    local FEATURES="$5"
+
+    echo ""
+    echo -e "${BOLD}Let's define your user stories${NC}"
+    echo ""
+
+    echo "If using git, what branch will this work be on? (just for documentation, won't checkout)"
+    echo "Leave blank if not using git."
+    read -p "> " BRANCH_NAME
+    BRANCH_NAME="${BRANCH_NAME:-N/A}"
+
+    # Only ask for description if not provided
+    if [ -z "$DESCRIPTION" ]; then
+        echo ""
+        echo "Describe the feature/project in 1-2 sentences:"
+        read -p "> " DESCRIPTION
+    fi
+
+    # Only ask for goal if not provided
+    if [ -z "$GOAL" ]; then
+        echo ""
+        echo "What is the main goal? What problem are you solving?"
+        read -p "> " GOAL
+    fi
+
+    echo ""
+    echo "What's the tech stack? (e.g., React, TypeScript, Node.js)"
+    echo "Leave blank to let Claude decide, or 'N/A' if not a coding project."
+    read -p "> " TECH_STACK
+    TECH_STACK="${TECH_STACK:-Claude will determine the best tech stack}"
+
+    # Only ask for features if not provided
+    if [ -z "$FEATURES" ]; then
+        echo ""
+        echo "List the key features/capabilities needed (one per line)."
+        echo "Press Enter twice when done:"
+        echo ""
+
+        FEATURES=""
+        while true; do
+            read -p "- " FEATURE
+            if [ -z "$FEATURE" ]; then
+                break
+            fi
+            FEATURES="${FEATURES}- ${FEATURE}\n"
+        done
+    fi
+
+    echo ""
+    echo "Any specific constraints or requirements? (optional, press Enter to skip)"
+    read -p "> " CONSTRAINTS
+
+    # Create temp input file
+    local TEMP_INPUT="/tmp/nelson-prd-input-$$.md"
+
+    cat > "$TEMP_INPUT" <<EOF
+# PRD Generation Request
+
+## Project Information
+- **Project Name**: $project_name
+- **Branch Name**: $BRANCH_NAME
+- **Description**: $DESCRIPTION
+- **Goal**: $GOAL
+- **Tech Stack**: $TECH_STACK
+
+## Features Requested
+$(echo -e "$FEATURES")
+
+## Constraints/Requirements
+$CONSTRAINTS
+
+---
+
+# Task
+
+Generate a comprehensive prd.json file with well-structured user stories.
+
+## Requirements
+
+1. Break down the features into atomic, testable user stories
+2. Each story should follow: "As a [role], I want [goal] so that [benefit]"
+3. Create specific, testable acceptance criteria for each story
+4. Include both functional and technical criteria (tests pass, typecheck passes)
+5. Order by priority (dependencies first)
+6. Set all "passes" to false initially
+7. Leave "notes" as empty strings
+
+## CRITICAL: Keep Stories Small and Focused
+
+**Each user story should be completable in ONE Nelson iteration (typically 1-2 hours of work).**
+
+❌ **BAD - Too Large:**
+- "Build complete authentication system with login, registration, password reset, email verification, and OAuth"
+- "Create admin panel with CRUD for all entities"
+- 10+ acceptance criteria in one story
+
+✅ **GOOD - Atomic and Focused:**
+- "Add user registration endpoint with email validation"
+- "Add JWT-based login endpoint"
+- "Add password reset request endpoint"
+- 3-6 acceptance criteria per story
+
+**If a feature requires multiple endpoints, data models, or subsystems, split it into separate stories.**
+
+Examples of when to split:
+- Multiple API endpoints → One story per endpoint (or logical group)
+- Frontend + Backend → Separate stories
+- Different user roles → Separate stories
+- Complex calculations + display → Separate stories
+
+## Output Format
+
+Output ONLY the JSON, no other text. Format:
+
+\`\`\`json
+{
+  "project": "PROJECT_NAME",
+  "branchName": "BRANCH_NAME",
+  "description": "DESCRIPTION",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Clear, specific title",
+      "description": "As a [role], I want [goal] so that [benefit]",
+      "acceptanceCriteria": [
+        "Specific, testable criterion",
+        "Another specific criterion",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
+\`\`\`
+
+Generate user stories ONLY for features that are actually specified.
+
+**IMPORTANT: Do NOT pad with generic stories.**
+- If only 2 features are listed, generate 2-4 stories max
+- If input is vague (e.g., "test", "build app"), generate 1-2 stories asking for clarification
+- Never generate placeholder stories like "Feature 1 implementation", "Feature 2 implementation"
+- Each story must map to a SPECIFIC, CONCRETE feature the user requested
+
+**Story Size Guidelines:**
+- 3-6 acceptance criteria per story (MAXIMUM 8)
+- If >8 criteria, MUST split into multiple stories
+- Each story = 1 feature/endpoint/component
+- Make acceptance criteria specific and testable
+EOF
+
+    print_info "Generating PRD with Claude..."
+    echo ""
+
+    # Run Claude
+    local CLAUDE_OUTPUT
+    CLAUDE_OUTPUT=$(cat "$TEMP_INPUT" | claude --dangerously-skip-permissions --print 2>&1)
+
+    # Extract JSON - try multiple approaches
+    local EXTRACTED
+
+    # First try: content between ```json and ```
+    EXTRACTED=$(echo "$CLAUDE_OUTPUT" | sed -n '/```json/,/```/p' | sed '1d;$d')
+
+    # Second try: content between ``` and ``` (no json marker)
+    if [ -z "$EXTRACTED" ]; then
+        EXTRACTED=$(echo "$CLAUDE_OUTPUT" | sed -n '/^```$/,/^```$/p' | sed '1d;$d')
+    fi
+
+    # Third try: look for raw JSON object
+    if [ -z "$EXTRACTED" ]; then
+        EXTRACTED=$(echo "$CLAUDE_OUTPUT" | grep -Pzo '(?s)\{.*"userStories".*\}' | tr '\0' '\n' || true)
+    fi
+
+    # Fourth try: whole output if it looks like JSON
+    if [ -z "$EXTRACTED" ]; then
+        if echo "$CLAUDE_OUTPUT" | head -1 | grep -q '^{'; then
+            EXTRACTED="$CLAUDE_OUTPUT"
+        fi
+    fi
+
+    echo "$EXTRACTED" > "$NELSON_DIR/$output_file"
+
+    # Validate
+    if [ -s "$NELSON_DIR/$output_file" ] && jq -e '.userStories | length > 0' "$NELSON_DIR/$output_file" >/dev/null 2>&1; then
+        print_success "PRD generated: $NELSON_DIR/$output_file"
+
+        local STORY_COUNT=$(jq '.userStories | length' "$NELSON_DIR/$output_file")
+        print_info "User Stories: $STORY_COUNT"
+        echo ""
+        jq -r '.userStories[] | "  \(.id): \(.title)"' "$NELSON_DIR/$output_file"
+    else
+        echo -e "${RED}Error: Failed to generate valid PRD${NC}"
+        echo "Claude output:"
+        echo "$CLAUDE_OUTPUT"
+        rm -f "$NELSON_DIR/$output_file"
+        rm -f "$TEMP_INPUT"
+        exit 1
+    fi
+
+    rm -f "$TEMP_INPUT"
+}
+
+# Full setup flow
+full_setup() {
+    print_info "Setting up Nelson for this project"
+    echo ""
+
+    # 1. Project name
+    local default_project=$(basename "$(pwd)")
+    echo -e "${BOLD}1. Project name${NC}"
+    read -p "[$default_project]: " PROJECT_NAME
+    PROJECT_NAME="${PROJECT_NAME:-$default_project}"
+
+    # 2. Description
+    echo ""
+    echo -e "${BOLD}2. Describe the feature/project in 1-2 sentences:${NC}"
+    read -p "> " PROJECT_DESCRIPTION
+
+    # 3. Goal
+    echo ""
+    echo -e "${BOLD}3. What is the main goal? What problem are you solving?${NC}"
+    read -p "> " PROJECT_GOAL
+
+    # 4. Features
+    echo ""
+    echo -e "${BOLD}4. List the key features/capabilities needed (one per line).${NC}"
+    echo "Press Enter twice when done:"
+    echo ""
+
+    PROJECT_FEATURES=""
+    while true; do
+        read -p "- " FEATURE
+        if [ -z "$FEATURE" ]; then
+            break
+        fi
+        PROJECT_FEATURES="${PROJECT_FEATURES}- ${FEATURE}\n"
+    done
+
+    # 5. Mode selection
+    prompt_choice "5. Review mode:" \
+        "Full Nelson - builds + holistic reviews + logging" \
+        "Classic Ralph - builds only, no review phases"
+    local mode_choice=$REPLY
+
+    local MODE="full"
+    local FREQUENCY=2
+
+    if [ $mode_choice -eq 1 ]; then
+        MODE="full"
+
+        # 6. Review frequency
+        prompt_choice "6. Review frequency:" \
+            "After every story (maximum rigor)" \
+            "Every 2 stories" \
+            "Every 3 stories" \
+            "Every 4 stories" \
+            "Every 5 stories"
+        local freq_choice=$REPLY
+        FREQUENCY=$freq_choice
+    else
+        MODE="quick"
+        FREQUENCY=0
+    fi
+
+    local LOCKING="true"
+
+    # Setup structure
+    print_info "Creating .nelson/ directory..."
+    setup_structure
+
+    # Save config
+    save_config "$PROJECT_NAME" "$MODE" "$FREQUENCY" "$LOCKING"
+    print_success "Config saved: $CONFIG_FILE"
+
+    # Generate PRD
+    run_prd_generator "prd.json" "$PROJECT_NAME" "$PROJECT_DESCRIPTION" "$PROJECT_GOAL" "$PROJECT_FEATURES"
+
+    echo ""
+    print_success "Nelson setup complete!"
+    echo ""
+    print_info "Next steps:"
+    echo "  1. Review/edit .nelson/prd.json if needed"
+    echo "  2. Update .nelson/AGENTS.md with project-specific info"
+    echo -e "  3. Run: ${BOLD}nelson-run${NC}"
+    echo ""
+}
+
+# Add another PRD
+add_prd() {
+    local project=$(jq -r '.project' "$CONFIG_FILE")
+    local next_prd=$(get_next_prd)
+
+    print_info "Creating $next_prd"
+
+    run_prd_generator "$next_prd" "$project"
+
+    echo ""
+    print_success "New PRD created: .nelson/$next_prd"
+    echo ""
+    print_info "Run ${BOLD}nelson-run${NC} to start working on it"
+    echo ""
+}
+
+# Reconfigure settings
+reconfigure() {
+    local project=$(jq -r '.project' "$CONFIG_FILE")
+
+    print_info "Reconfiguring Nelson settings"
+    echo ""
+
+    # Mode selection
+    prompt_choice "Review mode:" \
+        "Full Nelson - builds + holistic reviews + logging" \
+        "Classic Ralph - builds only, no review phases"
+    local mode_choice=$REPLY
+
+    local MODE="full"
+    local FREQUENCY=2
+
+    if [ $mode_choice -eq 1 ]; then
+        MODE="full"
+
+        prompt_choice "Review frequency:" \
+            "After every story (maximum rigor)" \
+            "Every 2 stories" \
+            "Every 3 stories" \
+            "Every 4 stories" \
+            "Every 5 stories"
+        local freq_choice=$REPLY
+        FREQUENCY=$freq_choice
+    else
+        MODE="quick"
+        FREQUENCY=0
+    fi
+
+    local LOCKING="true"
+
+    save_config "$project" "$MODE" "$FREQUENCY" "$LOCKING"
+    print_success "Config updated!"
+    echo ""
+}
+
+# Main flow
+main() {
+    print_header
+
+    # Check dependencies
+    if ! command -v claude &> /dev/null; then
+        echo -e "${RED}Error: claude command not found${NC}"
+        echo "Please install Claude Code first"
+        exit 1
+    fi
+
+    if ! command -v jq &> /dev/null; then
+        echo -e "${RED}Error: jq command not found${NC}"
+        echo "Install with: sudo dnf install jq (or brew install jq)"
+        exit 1
+    fi
+
+    # Check for existing setup
+    if check_existing; then
+        local prd_count=$(count_prds)
+
+        prompt_choice "Found existing Nelson setup ($prd_count PRD(s)). What would you like to do?" \
+            "Create another PRD" \
+            "Reconfigure settings" \
+            "Start fresh (overwrites everything)"
+        local choice=$REPLY
+
+        case $choice in
+            1) add_prd ;;
+            2) reconfigure ;;
+            3)
+                rm -rf "$NELSON_DIR"
+                full_setup
+                ;;
+        esac
+    else
+        full_setup
+    fi
+}
+
+main
