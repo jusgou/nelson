@@ -191,9 +191,9 @@ show_status() {
 
     echo -e "  ${CYAN}Last commit:${NC} $LAST_COMMIT"
 
-    # Warn if no activity for a while
-    if [ $TIME_SINCE_COMMIT -gt 300 ]; then
-      echo -e "  ${RED}⚠ No commits in $(($TIME_SINCE_COMMIT / 60)) minutes - may be stuck${NC}"
+    # Note if no recent commits (only if tasks remain)
+    if [ $TIME_SINCE_COMMIT -gt 300 ] && [ "$REMAINING_STORIES" -gt 0 ]; then
+      echo -e "  ${YELLOW}○ No commits in $(($TIME_SINCE_COMMIT / 60)) minutes${NC}"
     fi
   else
     echo -e "  ${GRAY}Not a git repository${NC}"

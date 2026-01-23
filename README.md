@@ -29,14 +29,18 @@ git clone git@github.com:jusgou/nelson.git ~/.nelson
 chmod +x ~/.nelson/bin/nelson-*
 ```
 
-Add to PATH permanently (pick one based on your shell):
+Add to PATH permanently (choose one method):
 
 ```bash
-# For bash users
-echo 'export PATH="$HOME/.nelson/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
+# Method 1: Symlink to system PATH (recommended - works everywhere including Claude)
+sudo ln -sf ~/.nelson/bin/nelson-* /usr/local/bin/
 
-# For zsh users
+# Method 2: Add to shell config (bash)
+echo 'export PATH="$HOME/.nelson/bin:$PATH"' >> ~/.bashrc
+echo 'export PATH="$HOME/.nelson/bin:$PATH"' >> ~/.bash_profile
+source ~/.bash_profile
+
+# Method 2: Add to shell config (zsh)
 echo 'export PATH="$HOME/.nelson/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```

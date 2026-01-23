@@ -49,9 +49,14 @@ print_info() {
 }
 
 check_scaffold() {
-    # Check if project has been scaffolded
-    if [ -d ".nelson" ] && [ ! -f ".nelson/loop.sh" ]; then
-        echo -e "${YELLOW}Warning: .nelson/ directory exists but loop.sh is missing${NC}"
+    # Check if project has been scaffolded (any workflow)
+    local has_loop=false
+    if [ -f ".nelson/loop.sh" ] || [ -f ".nelson/snarktank-loop.sh" ] || [ -f ".nelson/plan-build-loop.sh" ]; then
+        has_loop=true
+    fi
+
+    if [ -d ".nelson" ] && [ "$has_loop" = false ]; then
+        echo -e "${YELLOW}Warning: .nelson/ directory exists but no loop script found${NC}"
         echo "The project needs to be scaffolded before running the loop."
         echo ""
         read -p "Run 'nelson-scaffold nelson .' now? (Y/n) " -n 1 -r
