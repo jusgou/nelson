@@ -1,0 +1,216 @@
+#!/bin/bash
+# Nelson Punches Ralph - Quality review agent
+# Usage: nelson-punch-ralph [--start-at N] [--frequency N] [--force]
+#   --start-at N    Run first review after N completed stories (default: 3)
+#   --frequency N   Run review every N stories after start (default: 4)
+#   --force         Force review regardless of timing
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NELSON_DIR=".nelson"
+PRD_FILE="$NELSON_DIR/prd.json"
+LOGS_DIR="$NELSON_DIR/nelson-logs"
+REVIEW_PROMPT="$SCRIPT_DIR/../workflows/nelson-punches/CLAUDE.md"
+
+# Configuration defaults
+START_AT=${NELSON_START_AT:-3}
+FREQUENCY=${NELSON_FREQUENCY:-4}
+FORCE_MODE=false
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --start-at)
+      START_AT="$2"
+      shift 2
+      ;;
+    --frequency)
+      FREQUENCY="$2"
+      shift 2
+      ;;
+    --force)
+      FORCE_MODE=true
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Usage: nelson-punch-ralph [--start-at N] [--frequency N] [--force]"
+      exit 1
+      ;;
+  esac
+done
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+print_header() {
+    echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  Nelson Punches Ralph - Quality Review Agent          ${BLUE}║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+print_error() {
+    echo -e "${RED}✗${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+print_info() {
+    echo -e "${BLUE}→${NC} $1"
+}
+
+# Check if we're in a Nelson project
+if [ ! -f "$PRD_FILE" ]; then
+    print_error "Not in a Nelson project (no .nelson/prd.json found)"
+    exit 1
+fi
+
+# Create logs directory if needed
+mkdir -p "$LOGS_DIR"
+
+# Count completed stories
+COMPLETED_COUNT=$(jq '[.userStories[] | select(.passes == true)] | length' "$PRD_FILE")
+TOTAL_COUNT=$(jq '.userStories | length' "$PRD_FILE")
+
+print_header
+print_info "Project: $(jq -r '.project' "$PRD_FILE")"
+print_info "Completed stories: $COMPLETED_COUNT / $TOTAL_COUNT"
+print_info "Review config: Start at $START_AT, then every $FREQUENCY stories"
+echo ""
+
+if [ "$FORCE_MODE" = true ]; then
+    print_info "Force mode enabled - running review regardless of timing"
+    echo ""
+fi
+
+# Check if we should run review based on story count
+if [ "$FORCE_MODE" = false ]; then
+    if [ "$COMPLETED_COUNT" -lt "$START_AT" ]; then
+        print_info "Too early for Nelson review"
+        print_info "Need $START_AT completed stories to start reviews (currently: $COMPLETED_COUNT)"
+        print_info ""
+        print_info "Run with --force to review anyway"
+        exit 0
+    fi
+
+    # Check if we're at a review checkpoint (START_AT, START_AT+FREQUENCY, START_AT+2*FREQUENCY, etc.)
+    STORIES_SINCE_START=$((COMPLETED_COUNT - START_AT))
+    if [ "$COMPLETED_COUNT" -ne "$START_AT" ] && [ $((STORIES_SINCE_START % FREQUENCY)) -ne 0 ]; then
+        NEXT_REVIEW=$((START_AT + ((STORIES_SINCE_START / FREQUENCY + 1) * FREQUENCY)))
+        print_info "Not at a review checkpoint yet"
+        print_info "Next review at: $NEXT_REVIEW stories (currently: $COMPLETED_COUNT)"
+        print_info ""
+        print_info "Run with --force to review anyway"
+        exit 0
+    fi
+
+    print_success "Review checkpoint reached! ($COMPLETED_COUNT stories complete)"
+    echo ""
+fi
+
+# Check if we've reviewed recently
+LAST_REVIEW=$(ls -t "$LOGS_DIR"/*-review.md 2>/dev/null | head -1)
+if [ -n "$LAST_REVIEW" ]; then
+    LAST_REVIEW_TIME=$(stat -c %Y "$LAST_REVIEW" 2>/dev/null || stat -f %m "$LAST_REVIEW" 2>/dev/null)
+    CURRENT_TIME=$(date +%s)
+    TIME_DIFF=$((CURRENT_TIME - LAST_REVIEW_TIME))
+    HOURS_SINCE=$((TIME_DIFF / 3600))
+
+    if [ "$HOURS_SINCE" -lt 1 ] && [ "$FORCE_MODE" = false ]; then
+        print_info "Nelson reviewed recently (${HOURS_SINCE}h ago)"
+        print_info "Last review: $(basename "$LAST_REVIEW")"
+        print_info ""
+        print_info "Run with --force to review again"
+        exit 0
+    fi
+fi
+
+# Generate timestamp for this review
+TIMESTAMP=$(date +%Y-%m-%d-%H-%M-%S)
+REVIEW_FILE="$LOGS_DIR/${TIMESTAMP}-review.md"
+
+print_info "Starting Nelson review..."
+echo ""
+
+# Build context for Nelson
+CONTEXT_FILE="/tmp/nelson-context-$$.md"
+cat > "$CONTEXT_FILE" << EOF
+# Nelson Review Context
+
+## Project Information
+$(jq -r '. | "**Project**: \(.project)\n**Branch**: \(.branchName)\n**Description**: \(.description)"' "$PRD_FILE")
+
+## Completed Stories to Review
+$(jq -r '.userStories[] | select(.passes == true) | "- **\(.id)**: \(.title)\n  Priority: \(.priority), Notes: \(.notes)\n"' "$PRD_FILE")
+
+## Incomplete Stories (Context)
+$(jq -r '.userStories[] | select(.passes == false) | "- **\(.id)**: \(.title) (Priority: \(.priority))"' "$PRD_FILE")
+
+---
+
+# Nelson's Task
+
+1. Review the recent commits and code changes
+2. Verify completed stories actually meet their acceptance criteria
+3. Identify critical issues, compounding errors, and documentation gaps
+4. Create a detailed review log at: $REVIEW_FILE
+5. Output a summary of findings
+
+Follow the NELSON_REVIEW.md prompt for detailed instructions.
+
+**IMPORTANT**:
+- Be aggressive but fair
+- Only flag NON-TRIVIAL issues
+- Provide SPECIFIC locations and fixes
+- Avoid perfectionism loops
+- Focus on issues that could compound over time
+EOF
+
+# Run Claude as Nelson
+print_info "Nelson is reviewing the work..."
+echo ""
+
+# Combine Nelson's prompt with context
+cat "$REVIEW_PROMPT" "$CONTEXT_FILE" | claude --dangerously-skip-permissions --print 2>&1 | tee /dev/stderr
+
+# Check if review file was created
+if [ -f "$REVIEW_FILE" ]; then
+    print_success "Nelson review complete!"
+    print_info "Review saved to: $REVIEW_FILE"
+    echo ""
+
+    # Show summary
+    print_info "Review Summary:"
+    echo ""
+    if grep -q "APPROVE - Work meets quality standards" "$REVIEW_FILE"; then
+        print_success "Verdict: APPROVED"
+    elif grep -q "APPROVE WITH CONDITIONS" "$REVIEW_FILE"; then
+        echo -e "${YELLOW}⚠${NC} Verdict: APPROVED WITH CONDITIONS"
+    elif grep -q "REJECT - Critical issues" "$REVIEW_FILE"; then
+        print_error "Verdict: REJECTED - Critical fixes needed"
+    fi
+
+    echo ""
+    print_info "View full review: cat $REVIEW_FILE"
+else
+    print_error "Review file not created - Nelson may have encountered issues"
+fi
+
+# Cleanup
+rm -f "$CONTEXT_FILE"
+
+echo ""
+print_info "Next steps:"
+echo "  1. Read the review: cat $REVIEW_FILE"
+echo "  2. Address critical issues if any"
+echo "  3. Continue with next stories"
+NEXT_REVIEW=$((COMPLETED_COUNT + FREQUENCY))
+echo "  4. Next automatic review at: $NEXT_REVIEW stories"

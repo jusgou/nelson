@@ -1,0 +1,281 @@
+#!/bin/bash
+# Nelson Specs Generator - Interactive specifications builder
+# Usage: nelson-specs-generator
+
+set -e
+
+# Default to specs/ directory
+SPECS_DIR="specs"
+TEMP_INPUT="/tmp/nelson-specs-input-$$.md"
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+print_header() {
+    echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  Nelson Specs Generator - Build Specifications           ${BLUE}║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+print_success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+print_info() {
+    echo -e "${BLUE}→${NC} $1"
+}
+
+gather_input() {
+    print_header
+
+    echo "I'll ask you questions to build comprehensive specifications."
+    echo "Press Ctrl+C at any time to cancel."
+    echo ""
+
+    # Project basics
+    read -p "Project name: " PROJECT_NAME
+    read -p "Feature/module name: " FEATURE_NAME
+
+    echo ""
+    echo "What problem does this solve? (1-2 sentences)"
+    read -p "> " PROBLEM
+
+    echo ""
+    echo "What is the desired outcome? What should users be able to do?"
+    read -p "> " OUTCOME
+
+    echo ""
+    echo "What's the tech stack? (e.g., React, TypeScript, Node.js, PostgreSQL)"
+    read -p "> " TECH_STACK
+
+    echo ""
+    echo "List the main components/features needed (one per line)."
+    echo "Press Enter twice when done:"
+    echo ""
+
+    COMPONENTS=""
+    while true; do
+        read -p "- " COMPONENT
+        if [ -z "$COMPONENT" ]; then
+            break
+        fi
+        COMPONENTS="${COMPONENTS}- ${COMPONENT}\n"
+    done
+
+    echo ""
+    echo "Any technical requirements or constraints? (e.g., performance, accessibility, security)"
+    echo "One per line, Enter twice when done:"
+    echo ""
+
+    REQUIREMENTS=""
+    while true; do
+        read -p "- " REQUIREMENT
+        if [ -z "$REQUIREMENT" ]; then
+            break
+        fi
+        REQUIREMENTS="${REQUIREMENTS}- ${REQUIREMENT}\n"
+    done
+
+    echo ""
+    echo "Any edge cases or special scenarios to handle? (optional, Enter twice to skip)"
+    echo ""
+
+    EDGE_CASES=""
+    while true; do
+        read -p "- " EDGE_CASE
+        if [ -z "$EDGE_CASE" ]; then
+            break
+        fi
+        EDGE_CASES="${EDGE_CASES}- ${EDGE_CASE}\n"
+    done
+
+    # Create input file for Claude
+    cat > "$TEMP_INPUT" <<EOF
+# Specification Generation Request
+
+## Project Information
+- **Project Name**: $PROJECT_NAME
+- **Feature/Module**: $FEATURE_NAME
+- **Tech Stack**: $TECH_STACK
+
+## Problem Statement
+$PROBLEM
+
+## Desired Outcome
+$OUTCOME
+
+## Components/Features
+$(echo -e "$COMPONENTS")
+
+## Technical Requirements
+$(echo -e "$REQUIREMENTS")
+
+## Edge Cases
+$(echo -e "$EDGE_CASES")
+
+---
+
+# Task
+
+Generate comprehensive specification document(s) for the plan/build workflow.
+
+## Requirements
+
+1. Create clear, detailed specifications that Claude can use to plan implementation
+2. Include:
+   - **Overview**: High-level description of the feature
+   - **Goals**: What success looks like
+   - **User Stories/Use Cases**: How users interact with the feature
+   - **Technical Requirements**: Specific technical constraints and requirements
+   - **Data Models**: Database schema, API contracts, data structures
+   - **API Endpoints** (if applicable): Routes, methods, request/response formats
+   - **UI/UX** (if applicable): Component hierarchy, user flows, interactions
+   - **Edge Cases**: Error states, validation, boundary conditions
+   - **Testing Strategy**: What needs to be tested and how
+   - **Dependencies**: What needs to be built first
+
+3. Be specific and actionable - avoid vague requirements like "make it fast"
+4. Include examples where helpful (sample API requests/responses, UI mockups in text)
+5. Break into multiple spec files if the feature is large:
+   - \`overview.md\`: High-level goals and architecture
+   - \`api.md\`: API specifications
+   - \`ui.md\`: Frontend/UI specifications
+   - \`data-models.md\`: Database and data structures
+
+## Output Format
+
+Output markdown specifications. For each spec file, use this format:
+
+\`\`\`markdown:filename.md
+# Specification Title
+
+## Overview
+[Clear description of what this spec covers]
+
+## Goals
+- Goal 1
+- Goal 2
+
+## [Relevant sections based on content]
+...
+\`\`\`
+
+**If multiple files are needed**, output them separately with clear filenames.
+
+Generate comprehensive, actionable specifications that Nelson can use to plan and build the feature.
+EOF
+
+    print_info "Generating specifications with Claude..."
+    echo ""
+}
+
+generate_specs() {
+    # Use Claude to generate the specs
+    CLAUDE_OUTPUT=$(cat "$TEMP_INPUT" | claude --dangerously-skip-permissions --print 2>&1)
+
+    # Create specs directory if it doesn't exist
+    mkdir -p "$SPECS_DIR"
+
+    # Extract markdown files from output
+    # Look for ```markdown:filename.md blocks
+    echo "$CLAUDE_OUTPUT" > /tmp/claude-specs-output-$$.txt
+
+    # Try to extract multiple files
+    FOUND_FILES=0
+
+    # Match ```markdown:filename.md ... ``` blocks
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^\`\`\`markdown:([a-zA-Z0-9_-]+\.md) ]]; then
+            FILENAME="${BASH_REMATCH[1]}"
+            FOUND_FILES=1
+            CONTENT=""
+
+            # Read until closing ```
+            while IFS= read -r content_line; do
+                if [[ "$content_line" =~ ^\`\`\`$ ]]; then
+                    break
+                fi
+                CONTENT="${CONTENT}${content_line}\n"
+            done
+
+            # Write file
+            echo -e "$CONTENT" > "$SPECS_DIR/$FILENAME"
+            print_success "Created: $SPECS_DIR/$FILENAME"
+        fi
+    done < /tmp/claude-specs-output-$$.txt
+
+    # If no structured files found, try to extract from generic markdown block
+    if [ $FOUND_FILES -eq 0 ]; then
+        # Look for ```markdown or ``` blocks and save as single file
+        FILENAME="${FEATURE_NAME// /-}.md"
+        FILENAME=$(echo "$FILENAME" | tr '[:upper:]' '[:lower:]')
+
+        if echo "$CLAUDE_OUTPUT" | sed -n '/```markdown/,/```/p' | sed '1d;$d' > "$SPECS_DIR/$FILENAME" 2>/dev/null; then
+            print_success "Created: $SPECS_DIR/$FILENAME"
+            FOUND_FILES=1
+        elif echo "$CLAUDE_OUTPUT" | sed -n '/```/,/```/p' | sed '1d;$d' > "$SPECS_DIR/$FILENAME" 2>/dev/null; then
+            print_success "Created: $SPECS_DIR/$FILENAME"
+            FOUND_FILES=1
+        fi
+    fi
+
+    if [ $FOUND_FILES -eq 0 ]; then
+        echo "Error: Could not extract specifications from Claude output"
+        echo "Raw output saved to /tmp/claude-specs-output-$$.txt"
+        rm -f "$TEMP_INPUT"
+        exit 1
+    fi
+
+    echo ""
+    print_success "Specifications generated successfully!"
+    echo ""
+    print_info "Output written to: $SPECS_DIR/"
+    echo ""
+
+    # Show created files
+    print_info "Created files:"
+    ls -1 "$SPECS_DIR"/*.md | while read -r file; do
+        echo "  - $(basename "$file")"
+    done
+    echo ""
+
+    print_success "Next steps:"
+    echo "  1. Review and edit specs in $SPECS_DIR/ if needed"
+    echo "  2. Update .nelson/AGENTS.md with project-specific info"
+    echo "  3. Run planning phase: .nelson/loop.sh plan"
+    echo "  4. Review .nelson/@IMPLEMENTATION_PLAN.md"
+    echo "  5. Run build phase: .nelson/loop.sh 20"
+    echo "  6. Monitor progress: nelson-status --watch"
+
+    # Cleanup
+    rm -f "$TEMP_INPUT"
+    rm -f /tmp/claude-specs-output-$$.txt
+}
+
+# Check if claude is available
+if ! command -v claude &> /dev/null; then
+    echo "Error: claude command not found"
+    echo "Please ensure Claude Code is installed and in your PATH"
+    exit 1
+fi
+
+# Check if specs directory exists and has files
+if [ -d "$SPECS_DIR" ] && [ "$(ls -A $SPECS_DIR/*.md 2>/dev/null)" ]; then
+    echo -e "${YELLOW}Warning: $SPECS_DIR/ already contains .md files${NC}"
+    read -p "Continue and potentially overwrite? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Cancelled"
+        exit 0
+    fi
+fi
+
+# Main flow
+gather_input
+generate_specs
+
+print_success "Done! Ready to run planning phase!"

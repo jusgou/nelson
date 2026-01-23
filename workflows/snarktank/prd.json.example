@@ -1,0 +1,21 @@
+{
+  "project": "PROJECT_NAME",
+  "branchName": "ralph/BRANCH_NAME",
+  "description": "FEATURE_DESCRIPTION",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Story title",
+      "description": "As a [user], I want [goal] so that [benefit].",
+      "acceptanceCriteria": [
+        "Specific, testable criterion 1",
+        "Specific, testable criterion 2",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+#!/bin/bash
+# Nelson PRD Agent - Launch interactive PRD generation agent
+# Usage: nelson-prd-agent
+
+set -e
+
+TEMPLATES_DIR="$HOME/.nelson"
+PROMPT_FILE="$TEMPLATES_DIR/PRD_GENERATOR_PROMPT.md"
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+print_header() {
+    echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  Nelson PRD Agent - Interactive Story Builder          ${BLUE}║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+print_info() {
+    echo -e "${BLUE}→${NC} $1"
+}
+
+# Check if we're already in a Claude session
+if [ -n "$CLAUDE_SESSION" ]; then
+    print_header
+    echo "Launching PRD generator agent in current session..."
+    echo ""
+    echo "The agent will ask you questions and generate prd.json"
+    echo ""
+
+    cat "$PROMPT_FILE"
+    echo ""
+    echo "---"
+    echo ""
+    echo "Please describe your project and I'll help you create a comprehensive prd.json file."
+
+else
+    # Launch a new Claude session with the prompt
+    print_header
+    print_info "Launching interactive PRD generation session..."
+    echo ""
+
+    # Create a temporary session file
+    TEMP_SESSION="/tmp/nelson-prd-session-$$.md"
+
+    cat > "$TEMP_SESSION" <<'EOF'
+I want to create a prd.json file for a Nelson Loop project.
+
+Please help me by:
+1. Asking questions about my project
+2. Breaking down features into user stories
+3. Creating specific, testable acceptance criteria
+4. Generating the complete prd.json file
+
+Let's start!
+EOF
+
+    # Launch Claude with the PRD generator prompt
+    cat "$PROMPT_FILE" "$TEMP_SESSION" | claude --dangerously-skip-permissions
+
+    rm -f "$TEMP_SESSION"
+fi

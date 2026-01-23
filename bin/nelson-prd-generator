@@ -1,0 +1,264 @@
+#!/bin/bash
+# Nelson PRD Generator - Interactive PRD creation
+# Usage: nelson-prd-generator [output_file]
+
+set -e
+
+# Determine output file
+if [ -n "$1" ]; then
+    # User specified a file
+    OUTPUT_FILE="$1"
+elif [ -d ".nelson" ]; then
+    # .nelson directory exists - check for existing PRDs
+    if [ ! -f ".nelson/prd.json" ]; then
+        OUTPUT_FILE=".nelson/prd.json"
+    else
+        # prd.json exists - suggest next available number
+        NEXT_NUM=2
+        while [ -f ".nelson/prd-${NEXT_NUM}.json" ]; do
+            NEXT_NUM=$((NEXT_NUM + 1))
+        done
+        OUTPUT_FILE=".nelson/prd-${NEXT_NUM}.json"
+    fi
+else
+    OUTPUT_FILE="prd.json"
+fi
+
+TEMP_INPUT="/tmp/nelson-prd-input-$$.md"
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+print_header() {
+    echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  Nelson PRD Generator - Build User Stories Interactively ${BLUE}║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+print_success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+print_info() {
+    echo -e "${BLUE}→${NC} $1"
+}
+
+gather_input() {
+    print_header
+
+    print_info "Target: $OUTPUT_FILE"
+    echo ""
+
+    echo "I'll ask you questions to build a comprehensive PRD with user stories."
+    echo "Press Ctrl+C at any time to cancel."
+    echo ""
+
+    # Project basics
+    read -p "Project name: " PROJECT_NAME
+    read -p "Branch name (e.g., nelson/feature-name): " BRANCH_NAME
+
+    echo ""
+    echo "Describe the feature/project in 1-2 sentences:"
+    read -p "> " DESCRIPTION
+
+    echo ""
+    echo "What is the main goal? What problem are you solving?"
+    read -p "> " GOAL
+
+    echo ""
+    echo "What's the tech stack? (e.g., React, TypeScript, Node.js, PostgreSQL)"
+    read -p "> " TECH_STACK
+
+    echo ""
+    echo "List the key features/capabilities needed (one per line)."
+    echo "Press Enter twice when done:"
+    echo ""
+
+    FEATURES=""
+    while true; do
+        read -p "- " FEATURE
+        if [ -z "$FEATURE" ]; then
+            break
+        fi
+        FEATURES="${FEATURES}- ${FEATURE}\n"
+    done
+
+    echo ""
+    echo "Any specific constraints or requirements? (optional, press Enter to skip)"
+    read -p "> " CONSTRAINTS
+
+    # Create input file for Claude
+    cat > "$TEMP_INPUT" <<EOF
+# PRD Generation Request
+
+## Project Information
+- **Project Name**: $PROJECT_NAME
+- **Branch Name**: $BRANCH_NAME
+- **Description**: $DESCRIPTION
+- **Goal**: $GOAL
+- **Tech Stack**: $TECH_STACK
+
+## Features Requested
+$(echo -e "$FEATURES")
+
+## Constraints/Requirements
+$CONSTRAINTS
+
+---
+
+# Task
+
+Generate a comprehensive prd.json file with well-structured user stories.
+
+## Requirements
+
+1. Break down the features into atomic, testable user stories
+2. Each story should follow: "As a [role], I want [goal] so that [benefit]"
+3. Create specific, testable acceptance criteria for each story
+4. Include both functional and technical criteria (tests pass, typecheck passes)
+5. Order by priority (dependencies first)
+6. Set all "passes" to false initially
+7. Leave "notes" as empty strings
+
+## CRITICAL: Keep Stories Small and Focused
+
+**Each user story should be completable in ONE Nelson iteration (typically 1-2 hours of work).**
+
+❌ **BAD - Too Large:**
+- "Build complete authentication system with login, registration, password reset, email verification, and OAuth"
+- "Create admin panel with CRUD for all entities"
+- 10+ acceptance criteria in one story
+
+✅ **GOOD - Atomic and Focused:**
+- "Add user registration endpoint with email validation"
+- "Add JWT-based login endpoint"
+- "Add password reset request endpoint"
+- 3-6 acceptance criteria per story
+
+**If a feature requires multiple endpoints, data models, or subsystems, split it into separate stories.**
+
+Examples of when to split:
+- Multiple API endpoints → One story per endpoint (or logical group)
+- Frontend + Backend → Separate stories
+- Different user roles → Separate stories
+- Complex calculations + display → Separate stories
+
+## Output Format
+
+Output ONLY the JSON, no other text. Format:
+
+\`\`\`json
+{
+  "project": "PROJECT_NAME",
+  "branchName": "BRANCH_NAME",
+  "description": "DESCRIPTION",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Clear, specific title",
+      "description": "As a [role], I want [goal] so that [benefit]",
+      "acceptanceCriteria": [
+        "Specific, testable criterion",
+        "Another specific criterion",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
+\`\`\`
+
+Generate 5-15 user stories depending on complexity. PREFER MORE SMALLER STORIES over fewer large ones.
+
+**Story Size Guidelines:**
+- 3-6 acceptance criteria per story (MAXIMUM 8)
+- If >8 criteria, MUST split into multiple stories
+- Each story = 1 feature/endpoint/component
+- Make acceptance criteria specific and testable
+EOF
+
+    print_info "Generating PRD with Claude..."
+    echo ""
+}
+
+generate_prd() {
+    # Use Claude to generate the PRD
+    CLAUDE_OUTPUT=$(cat "$TEMP_INPUT" | claude --dangerously-skip-permissions --print 2>&1)
+
+    # Extract JSON from output (look for content between ```json and ```)
+    echo "$CLAUDE_OUTPUT" | sed -n '/```json/,/```/p' | sed '1d;$d' > "$OUTPUT_FILE"
+
+    # Validate it's valid JSON
+    if jq empty "$OUTPUT_FILE" 2>/dev/null; then
+        print_success "PRD generated successfully!"
+        echo ""
+        print_info "Output written to: $OUTPUT_FILE"
+        echo ""
+
+        # Show summary
+        STORY_COUNT=$(jq '.userStories | length' "$OUTPUT_FILE")
+        print_info "Summary:"
+        echo "  - Project: $(jq -r '.project' "$OUTPUT_FILE")"
+        echo "  - Branch: $(jq -r '.branchName' "$OUTPUT_FILE")"
+        echo "  - User Stories: $STORY_COUNT"
+        echo ""
+
+        # Show story titles
+        print_info "User Stories:"
+        jq -r '.userStories[] | "  \(.id): \(.title)"' "$OUTPUT_FILE"
+        echo ""
+
+        print_success "Next steps:"
+        echo "  1. Review and edit $OUTPUT_FILE if needed"
+        echo "  2. Update .nelson/AGENTS.md with project-specific info"
+        echo "  3. Run: .nelson/loop.sh --start-review 1 --review-every 1 20"
+    else
+        echo "Error: Failed to generate valid JSON"
+        echo "Claude output was:"
+        cat "$OUTPUT_FILE"
+        rm -f "$OUTPUT_FILE"
+        rm -f "$TEMP_INPUT"
+        exit 1
+    fi
+
+    # Cleanup
+    rm -f "$TEMP_INPUT"
+}
+
+# Check if claude is available
+if ! command -v claude &> /dev/null; then
+    echo "Error: claude command not found"
+    echo "Please ensure Claude Code is installed and in your PATH"
+    exit 1
+fi
+
+# Check if jq is available
+if ! command -v jq &> /dev/null; then
+    echo "Error: jq command not found"
+    echo "Please install jq: sudo dnf install jq"
+    exit 1
+fi
+
+# Check if output file exists
+if [ -f "$OUTPUT_FILE" ]; then
+    echo -e "${YELLOW}Warning: $OUTPUT_FILE already exists${NC}"
+    read -p "Overwrite? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Cancelled"
+        exit 0
+    fi
+fi
+
+# Main flow
+gather_input
+generate_prd
+
+print_success "Done! Happy Nelson-ing!"

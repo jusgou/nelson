@@ -1,0 +1,70 @@
+#!/bin/bash
+# Nelson PRD Edit - Open the active PRD file in your editor
+# Usage: nelson-prd-edit
+
+set -e
+
+# Colors
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# Find .nelson directory
+if [ -d ".nelson" ]; then
+    NELSON_DIR=".nelson"
+elif [ -d "./.nelson" ]; then
+    NELSON_DIR="./.nelson"
+else
+    echo "Error: No .nelson directory found"
+    echo "Run nelson-scaffold first"
+    exit 1
+fi
+
+# Find active PRD (first incomplete one, or most recent)
+find_active_prd() {
+    local files=()
+
+    # Collect PRD files
+    [ -f "$NELSON_DIR/prd.json" ] && files+=("$NELSON_DIR/prd.json")
+    for f in "$NELSON_DIR"/prd-[0-9]*.json; do
+        [ -f "$f" ] && files+=("$f")
+    done
+
+    if [ ${#files[@]} -eq 0 ]; then
+        echo ""
+        return
+    fi
+
+    # Sort by number
+    printf '%s\n' "${files[@]}" | sort -t'-' -k2 -n | while read prd; do
+        # Check if incomplete
+        local incomplete=$(jq '[.userStories[] | select(.passes == false)] | length' "$prd" 2>/dev/null || echo "999")
+        if [ "$incomplete" -gt 0 ]; then
+            echo "$prd"
+            return
+        fi
+    done
+
+    # All complete - return the last one
+    printf '%s\n' "${files[@]}" | sort -t'-' -k2 -n | tail -1
+}
+
+ACTIVE_PRD=$(find_active_prd)
+
+if [ -z "$ACTIVE_PRD" ]; then
+    echo -e "${YELLOW}!${NC} No PRD files found in $NELSON_DIR/"
+    echo "Run nelson-prd-generator to create one"
+    exit 1
+fi
+
+# Show status
+COMPLETED=$(jq '[.userStories[] | select(.passes == true)] | length' "$ACTIVE_PRD" 2>/dev/null || echo "0")
+TOTAL=$(jq '.userStories | length' "$ACTIVE_PRD" 2>/dev/null || echo "0")
+
+echo -e "${BLUE}→${NC} Opening: $ACTIVE_PRD ($COMPLETED/$TOTAL complete)"
+
+# Determine editor
+EDITOR="${EDITOR:-${VISUAL:-nano}}"
+
+# Open in editor
+exec $EDITOR "$ACTIVE_PRD"
