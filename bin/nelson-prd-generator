@@ -30,6 +30,7 @@ TEMP_INPUT="/tmp/nelson-prd-input-$$.md"
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
+RED='\033[0;31m'
 NC='\033[0m'
 
 print_header() {
@@ -47,8 +48,46 @@ print_info() {
     echo -e "${BLUE}→${NC} $1"
 }
 
+check_scaffold() {
+    # Check if project has been scaffolded
+    if [ -d ".nelson" ] && [ ! -f ".nelson/loop.sh" ]; then
+        echo -e "${YELLOW}Warning: .nelson/ directory exists but loop.sh is missing${NC}"
+        echo "The project needs to be scaffolded before running the loop."
+        echo ""
+        read -p "Run 'nelson-scaffold nelson .' now? (Y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            if command -v nelson-scaffold &> /dev/null; then
+                nelson-scaffold nelson .
+                echo ""
+            else
+                echo -e "${RED}Error: nelson-scaffold not found in PATH${NC}"
+                exit 1
+            fi
+        fi
+    elif [ ! -d ".nelson" ]; then
+        echo -e "${YELLOW}Note: .nelson/ directory doesn't exist yet${NC}"
+        echo "The project needs to be scaffolded to run the loop."
+        echo ""
+        read -p "Run 'nelson-scaffold nelson .' now? (Y/n) " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            if command -v nelson-scaffold &> /dev/null; then
+                nelson-scaffold nelson .
+                echo ""
+            else
+                echo -e "${RED}Error: nelson-scaffold not found in PATH${NC}"
+                exit 1
+            fi
+        fi
+    fi
+}
+
 gather_input() {
     print_header
+
+    # Check if scaffolding is needed
+    check_scaffold
 
     print_info "Target: $OUTPUT_FILE"
     echo ""
@@ -192,11 +231,31 @@ generate_prd() {
     # Use Claude to generate the PRD
     CLAUDE_OUTPUT=$(cat "$TEMP_INPUT" | claude --dangerously-skip-permissions --print 2>&1)
 
-    # Extract JSON from output (look for content between ```json and ```)
-    echo "$CLAUDE_OUTPUT" | sed -n '/```json/,/```/p' | sed '1d;$d' > "$OUTPUT_FILE"
+    # Extract JSON from output - try multiple approaches
+    # First try: content between ```json and ```
+    EXTRACTED=$(echo "$CLAUDE_OUTPUT" | sed -n '/```json/,/```/p' | sed '1d;$d')
 
-    # Validate it's valid JSON
-    if jq empty "$OUTPUT_FILE" 2>/dev/null; then
+    # Second try: content between ``` and ``` (no json marker)
+    if [ -z "$EXTRACTED" ]; then
+        EXTRACTED=$(echo "$CLAUDE_OUTPUT" | sed -n '/^```$/,/^```$/p' | sed '1d;$d')
+    fi
+
+    # Third try: look for raw JSON object (starts with {)
+    if [ -z "$EXTRACTED" ]; then
+        EXTRACTED=$(echo "$CLAUDE_OUTPUT" | grep -Pzo '(?s)\{.*"userStories".*\}' | tr '\0' '\n' || true)
+    fi
+
+    # Fourth try: just use the whole output if it looks like JSON
+    if [ -z "$EXTRACTED" ]; then
+        if echo "$CLAUDE_OUTPUT" | head -1 | grep -q '^{'; then
+            EXTRACTED="$CLAUDE_OUTPUT"
+        fi
+    fi
+
+    echo "$EXTRACTED" > "$OUTPUT_FILE"
+
+    # Validate it's valid JSON AND has content
+    if [ -s "$OUTPUT_FILE" ] && jq -e '.userStories | length > 0' "$OUTPUT_FILE" >/dev/null 2>&1; then
         print_success "PRD generated successfully!"
         echo ""
         print_info "Output written to: $OUTPUT_FILE"
@@ -220,9 +279,18 @@ generate_prd() {
         echo "  2. Update .nelson/AGENTS.md with project-specific info"
         echo "  3. Run: .nelson/loop.sh --start-review 1 --review-every 1 20"
     else
-        echo "Error: Failed to generate valid JSON"
-        echo "Claude output was:"
+        echo ""
+        echo -e "${YELLOW}Error: Failed to generate valid JSON with user stories${NC}"
+        echo ""
+        echo "Extracted content was:"
+        echo "---"
         cat "$OUTPUT_FILE"
+        echo "---"
+        echo ""
+        echo "Full Claude output was:"
+        echo "---"
+        echo "$CLAUDE_OUTPUT"
+        echo "---"
         rm -f "$OUTPUT_FILE"
         rm -f "$TEMP_INPUT"
         exit 1
