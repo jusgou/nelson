@@ -48,6 +48,33 @@ GRAY='\033[0;90m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
+# Inactivity timeout (90 minutes = 5400 seconds)
+INACTIVITY_TIMEOUT=5400
+
+# Get last activity timestamp (most recent of file modification or git commit)
+get_last_activity() {
+  local last_mod=0
+  local last_commit=0
+
+  # Last file modification
+  local last_modified_file=$(find . -type f -not -path "./.git/*" -not -path "./target/*" -not -path "./.nelson/archive/*" -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | awk '{print $1}')
+  if [ -n "$last_modified_file" ]; then
+    last_mod=${last_modified_file%.*}
+  fi
+
+  # Last git commit
+  if git rev-parse --git-dir > /dev/null 2>&1; then
+    last_commit=$(git log -1 --format="%ct" 2>/dev/null || echo "0")
+  fi
+
+  # Return the more recent of the two
+  if [ "$last_mod" -gt "$last_commit" ]; then
+    echo "$last_mod"
+  else
+    echo "$last_commit"
+  fi
+}
+
 show_status() {
   clear
 
@@ -236,7 +263,15 @@ show_status() {
 
   # Footer
   if [ "$WATCH_MODE" = true ]; then
-    echo -e "${GRAY}Refreshing every ${REFRESH_INTERVAL}s... (Press Ctrl+C to exit)${NC}"
+    # Calculate time until auto-close
+    local last_activity=$(get_last_activity)
+    local current=$(date +%s)
+    local inactive=$((current - last_activity))
+    local remaining=$(((INACTIVITY_TIMEOUT - inactive) / 60))
+    if [ "$remaining" -lt 0 ]; then
+      remaining=0
+    fi
+    echo -e "${GRAY}Refreshing every ${REFRESH_INTERVAL}s | Auto-close in ${remaining}m | Ctrl+C to exit${NC}"
   else
     echo -e "${GRAY}Use --watch to auto-refresh${NC}"
   fi
@@ -246,6 +281,19 @@ show_status() {
 if [ "$WATCH_MODE" = true ]; then
   while true; do
     show_status
+
+    # Check for inactivity timeout
+    LAST_ACTIVITY=$(get_last_activity)
+    CURRENT_TIME=$(date +%s)
+    INACTIVE_SECONDS=$((CURRENT_TIME - LAST_ACTIVITY))
+
+    if [ "$INACTIVE_SECONDS" -ge "$INACTIVITY_TIMEOUT" ]; then
+      INACTIVE_MINS=$((INACTIVE_SECONDS / 60))
+      echo ""
+      echo -e "${YELLOW}No activity for ${INACTIVE_MINS} minutes. Auto-closing status watch.${NC}"
+      exit 0
+    fi
+
     sleep $REFRESH_INTERVAL
   done
 else

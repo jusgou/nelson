@@ -158,6 +158,8 @@ AGENTS_EOF
     if [ ! -f "$NELSON_DIR/.gitignore" ]; then
         cat > "$NELSON_DIR/.gitignore" << 'GITIGNORE_EOF'
 .locks/
+.review-state/
+.session-state
 *.lock
 GITIGNORE_EOF
     fi

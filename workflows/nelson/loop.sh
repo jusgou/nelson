@@ -28,8 +28,8 @@ EXPLICIT_PRD=""
 USE_LOCKING=true
 
 # Session management - controls when to start fresh vs continue
-MAX_SESSION_ITERATIONS=6        # Fresh start after N iterations in same session
-STORIES_PER_SESSION=3           # Or fresh start after N stories completed
+MAX_SESSION_ITERATIONS=4        # Fresh start after N iterations in same session
+STORIES_PER_SESSION=2           # Or fresh start after N stories completed
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -80,7 +80,7 @@ PROGRESS_FILE="$SCRIPT_DIR/progress.txt"
 COMPLETIONS_DIR="$SCRIPT_DIR/completions"
 LOGS_DIR="$SCRIPT_DIR/nelson-logs"
 LOCKS_DIR="$SCRIPT_DIR/.locks"
-LAST_REVIEW_FILE="$SCRIPT_DIR/.last-review-count"
+REVIEW_STATE_DIR="$SCRIPT_DIR/.review-state"
 SESSION_FILE="$SCRIPT_DIR/.session-state"
 HANDOFF_FILE="$SCRIPT_DIR/handoff-summary.md"
 
@@ -376,12 +376,50 @@ get_prd_name() {
   basename "$1" .json
 }
 
-get_last_review_count() {
-  [ -f "$LAST_REVIEW_FILE" ] && cat "$LAST_REVIEW_FILE" || echo "0"
+# Get review state file path for a PRD
+get_review_state_file() {
+  local prd="$1"
+  local prd_name=$(basename "$prd")
+  echo "$REVIEW_STATE_DIR/${prd_name%.json}.state"
 }
 
+# Get last review count for current PRD
+get_last_review_count() {
+  local state_file=$(get_review_state_file "$ACTIVE_PRD")
+  if [ -f "$state_file" ]; then
+    grep "^last_review_at=" "$state_file" 2>/dev/null | cut -d= -f2 || echo "0"
+  else
+    echo "0"
+  fi
+}
+
+# Set last review count for current PRD
 set_last_review_count() {
-  echo "$1" > "$LAST_REVIEW_FILE"
+  local count="$1"
+  local state_file=$(get_review_state_file "$ACTIVE_PRD")
+  local total_reviews=0
+
+  mkdir -p "$REVIEW_STATE_DIR"
+
+  # Increment total reviews if file exists
+  if [ -f "$state_file" ]; then
+    total_reviews=$(grep "^total_reviews=" "$state_file" 2>/dev/null | cut -d= -f2 || echo "0")
+  fi
+  total_reviews=$((total_reviews + 1))
+
+  cat > "$state_file" << EOF
+last_review_at=$count
+total_reviews=$total_reviews
+last_updated=$(date -Iseconds)
+prd=$(basename "$ACTIVE_PRD")
+EOF
+}
+
+# Reset review state for a PRD (used when PRD changes significantly)
+reset_review_state() {
+  local prd="$1"
+  local state_file=$(get_review_state_file "$prd")
+  rm -f "$state_file"
 }
 
 should_review() {
