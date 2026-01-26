@@ -9,7 +9,17 @@
 
 # Nelson
 
-Autonomous AI development with quality control. Nelson builds your features and reviews its own work to catch bugs before they compound.
+Autonomous AI development with quality control. Nelson builds your features and reviews its own work to catch bugs before they compound. The Nelson loop is designed to minimize the effect of compounded errors and ensure that agents are viewing projects holistically, integrating features within the context of existing schemas. 
+
+For heavy, intensive coding processes with multi-step feature creation, a lookback of 1 might be useful; however, this is usage intensive and may result in heavy token depletion. For most projects, a lookback of 5 (reviewing completed work in the context of the project as a whole every 5 stories) is likely more than sufficient). 
+
+Thanks to user contributions, a few updates are incoming: 
+1. Moving model and lookback selection to nelson-run. This will allow users to stop and start and change parameters more easily.
+2. A real-time editor that allows adjustments to be made to the instructions (essentially an agent-driven, interactive prd.json editor)
+3. Paste task list to register individual items as rows
+4. Token usage optimization to streamline re-contextualization at every lookback / new instance start-up
+
+Thanks for your contributions and feedback!
 
 ## Requirements
 
