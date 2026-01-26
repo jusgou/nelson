@@ -20,7 +20,13 @@ Autonomous AI development with quality control. Nelson builds your features and 
 
 ```bash
 git clone git@github.com:jusgou/nelson.git ~/.nelson
-sudo ln -sf ~/.nelson/bin/nelson-* /usr/local/bin/
+cd ~/.nelson
+./install.sh
+```
+
+Add to your shell config (`~/.bashrc` or `~/.zshrc`):
+```bash
+export PATH="$HOME/.nelson/bin:$PATH"
 ```
 
 Verify: `nelson-init --help`
