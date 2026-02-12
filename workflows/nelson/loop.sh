@@ -4,6 +4,7 @@
 #
 # Options:
 #   --tool amp|claude       AI tool to use (default: claude)
+#   --model MODEL           Claude model to use (e.g. sonnet, opus, haiku)
 #   --start-review N        Start reviews after N stories (default: 1)
 #   --review-every N        Review every N stories after start (default: 1)
 #   --prd FILE              Target specific PRD file (no auto-advance)
@@ -21,6 +22,7 @@ set -e
 # ============================================================
 
 TOOL="claude"
+CLAUDE_MODEL=""
 MAX_ITERATIONS=20
 START_REVIEW=${NELSON_START_AT:-1}
 REVIEW_EVERY=${NELSON_FREQUENCY:-1}
@@ -39,6 +41,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --tool=*)
       TOOL="${1#*=}"
+      shift
+      ;;
+    --model)
+      CLAUDE_MODEL="$2"
+      shift 2
+      ;;
+    --model=*)
+      CLAUDE_MODEL="${1#*=}"
       shift
       ;;
     --start-review)
@@ -273,7 +283,11 @@ EOF
   if [[ "$TOOL" == "amp" ]]; then
     output=$(cat "$handoff_prompt" | amp --dangerously-allow-all 2>&1) || true
   else
-    output=$(cat "$handoff_prompt" | claude --dangerously-skip-permissions --print --continue 2>&1) || true
+    local hmodel_flag=""
+    if [ -n "$CLAUDE_MODEL" ]; then
+      hmodel_flag="--model $CLAUDE_MODEL"
+    fi
+    output=$(cat "$handoff_prompt" | claude $hmodel_flag --dangerously-skip-permissions --print --continue 2>&1) || true
   fi
   rm -f "$handoff_prompt"
 
@@ -290,13 +304,19 @@ run_claude() {
   local use_continue="$2"
   local output
 
+  # Build model flag if set
+  local model_flag=""
+  if [ -n "$CLAUDE_MODEL" ]; then
+    model_flag="--model $CLAUDE_MODEL"
+  fi
+
   if [[ "$TOOL" == "amp" ]]; then
     output=$(cat "$prompt_file" | amp --dangerously-allow-all 2>&1 | tee /dev/stderr) || true
   else
     if [ "$use_continue" = true ]; then
-      output=$(cat "$prompt_file" | claude --dangerously-skip-permissions --print --continue 2>&1 | tee /dev/stderr) || true
+      output=$(cat "$prompt_file" | claude $model_flag --dangerously-skip-permissions --print --continue 2>&1 | tee /dev/stderr) || true
     else
-      output=$(cat "$prompt_file" | claude --dangerously-skip-permissions --print 2>&1 | tee /dev/stderr) || true
+      output=$(cat "$prompt_file" | claude $model_flag --dangerously-skip-permissions --print 2>&1 | tee /dev/stderr) || true
     fi
   fi
 
@@ -615,7 +635,11 @@ TOTAL=$(get_total_count "$ACTIVE_PRD")
 
 echo -e "${BLUE}→${NC} PRD: $PRD_NAME ($COMPLETED/$TOTAL complete)"
 echo -e "${BLUE}→${NC} Review: start at $START_REVIEW, then every $REVIEW_EVERY"
-echo -e "${BLUE}→${NC} Tool: $TOOL | Max iterations: $MAX_ITERATIONS"
+if [ -n "$CLAUDE_MODEL" ]; then
+  echo -e "${BLUE}→${NC} Tool: $TOOL | Model: $CLAUDE_MODEL | Max iterations: $MAX_ITERATIONS"
+else
+  echo -e "${BLUE}→${NC} Tool: $TOOL | Max iterations: $MAX_ITERATIONS"
+fi
 if [ "$USE_LOCKING" = true ]; then
   echo -e "${BLUE}→${NC} Locking: enabled"
 else

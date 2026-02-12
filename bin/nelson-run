@@ -217,6 +217,38 @@ main() {
     print_info "Mode: $(describe_mode "$MODE" "$FREQUENCY")"
     echo ""
 
+    # Model selection
+    prompt_choice "Which Claude model should Nelson use?" \
+        "Sonnet 4.5 (fast, cost-effective)" \
+        "Opus 4.5 (strongest reasoning)" \
+        "Sonnet 4 (balanced)" \
+        "Haiku 3.5 (fastest, cheapest)"
+    local model_choice=$REPLY
+
+    local SELECTED_MODEL=""
+    case $model_choice in
+        1) SELECTED_MODEL="sonnet" ;;
+        2) SELECTED_MODEL="opus" ;;
+        3) SELECTED_MODEL="claude-sonnet-4-20250514" ;;
+        4) SELECTED_MODEL="haiku" ;;
+    esac
+
+    print_success "Model: $SELECTED_MODEL"
+    echo ""
+
+    # Review frequency override
+    if [ "$MODE" = "full" ]; then
+        prompt_choice "How many stories before a review phase?" \
+            "After every story (maximum rigor)" \
+            "Every 2 stories" \
+            "Every 3 stories" \
+            "Every 4 stories" \
+            "Every 5 stories"
+        FREQUENCY=$REPLY
+        print_success "Review frequency: every $FREQUENCY story(ies)"
+        echo ""
+    fi
+
     # Find available PRD
     local TARGET_PRD
     TARGET_PRD=$(find_available_prd "$LOCKING")
@@ -319,12 +351,17 @@ main() {
         print_info "Target: $TARGET_PRD ($status)"
         echo ""
         print_info "Starting Nelson..."
+        print_info "Model: $SELECTED_MODEL"
         print_info "Mode: $(describe_mode "$MODE" "$FREQUENCY")"
         print_info "Max iterations: $max_iterations"
         echo ""
 
         # Build command
         local CMD="$NELSON_DIR/loop.sh"
+
+        if [ -n "$SELECTED_MODEL" ]; then
+            CMD="$CMD --model $SELECTED_MODEL"
+        fi
 
         if [ "$MODE" = "full" ]; then
             CMD="$CMD --start-review 1 --review-every $FREQUENCY"
