@@ -4,9 +4,43 @@
 
 REFRESH_INTERVAL=2
 WATCH_MODE=false
-PRD_FILE=".nelson/prd.json"
+PRD_FILE=""
 PLAN_FILE=".nelson/@IMPLEMENTATION_PLAN.md"
 MODE="auto"
+
+# Auto-detect active PRD: check locks first, then find first incomplete
+find_active_prd() {
+  local nelson_dir=".nelson"
+
+  # 1. Check for a locked (actively running) PRD
+  if [ -d "$nelson_dir/.locks" ]; then
+    for lock_file in "$nelson_dir/.locks"/*.lock; do
+      [ -f "$lock_file" ] || continue
+      local lock_pid=$(cat "$lock_file" 2>/dev/null)
+      if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+        # Active lock — extract PRD name from lock filename
+        local prd_name=$(basename "$lock_file" .lock)
+        if [ -f "$nelson_dir/$prd_name" ]; then
+          echo "$nelson_dir/$prd_name"
+          return 0
+        fi
+      fi
+    done
+  fi
+
+  # 2. No active lock — find first incomplete PRD
+  for prd_path in "$nelson_dir"/prd.json "$nelson_dir"/prd-*.json; do
+    [ -f "$prd_path" ] || continue
+    local incomplete=$(jq '[.userStories[] | select(.passes == false)] | length' "$prd_path" 2>/dev/null)
+    if [ -n "$incomplete" ] && [ "$incomplete" -gt 0 ]; then
+      echo "$prd_path"
+      return 0
+    fi
+  done
+
+  # 3. All complete or none found — fall back to prd.json
+  echo "$nelson_dir/prd.json"
+}
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -27,8 +61,8 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: nelson-status [--watch [interval]] [--prd path/to/prd.json]"
       echo ""
       echo "Options:"
-      echo "  --watch, -w [N]   Auto-refresh every N seconds (default: 2)"
-      echo "  --prd PATH        Path to prd.json (default: .nelson/prd.json)"
+      echo "  --watch, -w [N]   Auto-refresh every N seconds (default: .nelson/prd.json)"
+      echo "  --prd PATH        Path to prd.json (default: auto-detect active PRD)"
       echo "  --help, -h        Show this help"
       exit 0
       ;;
@@ -37,6 +71,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Auto-detect PRD if not specified via --prd
+if [ -z "$PRD_FILE" ]; then
+  PRD_FILE=$(find_active_prd)
+fi
 
 # Colors
 RED='\033[0;31m'
@@ -133,6 +172,7 @@ show_status() {
 
   # Project Info
   echo -e "${CYAN}Mode:${NC}    ${BOLD}$MODE${NC}"
+  echo -e "${CYAN}PRD:${NC}     $(basename "$PRD_FILE")"
   echo -e "${CYAN}Project:${NC} $PROJECT"
   echo -e "${CYAN}Branch:${NC}  $BRANCH"
   echo ""
